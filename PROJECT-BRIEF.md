@@ -23,8 +23,8 @@
 | 初版 | 失敗整批 requeue | 暫時的 Supabase 不可用不丟資料 |
 | 初版 | 不做告警 | 依靠 `restart: always` |
 | 對齊官方文件後 | `subscribe(session=Session.ALL, is_detailed_orderbook=True)` | 涵蓋夜期 + 取得擺盤每檔逐筆委託明細 |
-| 對齊官方文件後 | 啟動時 `set_all_thread_daemon(True)` | 防止 ctx.close() 卡住時主程序退不掉 |
 | 對齊官方文件後 | Ticker 改單筆 try/except + `.get()` | 避免單欄位缺失打掛整批 |
+| futu-api v10.5+ | 移除 `set_all_thread_daemon` 呼叫 | SDK v10.5+ 已刪除該 API，import 失敗會卡 restart 迴圈；改靠 `shutdown_event` + `daemon=True` 自管 thread lifecycle |
 | V2 重構 | 改混合式儲存（核心欄位 + raw_payload JSONB） | 查詢效能 + 完整資料追溯兩者兼顧 |
 | V2 重構 | OrderBook 主時間用 `svr_recv_time_bid`，空值 fallback `received_at` | 保留交易所側時間語義，且 NOT NULL |
 | V2 重構 | 加 `bid_levels` / `ask_levels` 核心欄位 | 監控擺盤完整性（是否每次都 10 檔）|
@@ -117,13 +117,12 @@ loop until shutdown:
 ### 啟動 / 關機順序
 ```
 startup:
-    set_all_thread_daemon(True)                  # 確保 SDK 內部 thread 為 daemon
     create supabase client
     ctx = build_ctx()                            # subscribe(session=Session.ALL,
                                                  #           is_detailed_orderbook=True)
                                                  # 失敗即 sys.exit(1)
-    start 4 BatchWriter threads
-    start 1 health-check thread
+    start 4 BatchWriter threads (daemon=True)    # 自管 thread lifecycle
+    start 1 health-check thread (daemon=True)
     register SIGINT / SIGTERM → shutdown_event.set()
     main thread sleep until shutdown
 
