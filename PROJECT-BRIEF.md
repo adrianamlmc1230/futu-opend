@@ -10,7 +10,8 @@
 - ✅ 4 張表 DDL（V2 混合式：核心欄位 + raw_payload JSONB）
 - ✅ 主程序：訂閱、回調、佇列、批次寫入、健康檢查、訊號處理
 - ✅ Docker 化（host network + restart:always）
-- ⏸ 等待 Futu OpenD LV2 API 權限核准（預計次日獲批）
+- ✅ **已上線運行**：阿里雲香港 VPS (`47.76.134.145`) + Futu OpenD 10.5.6508 + container 自動重啟
+- ✅ Futu HK Futures LV2 權限正常，4 張表持續寫入（每秒數十筆）
 - ⏸ 尚未做舊資料清理（依需求暫不做）
 
 ## 關鍵決策紀錄
