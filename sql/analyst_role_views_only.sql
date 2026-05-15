@@ -1,29 +1,17 @@
 -- =====================================================================
--- Phase 1：分析部門存取 — Read-only User + VIEW 抽象層
+-- Phase 1 Step 2：建立 VIEW + 授權（不含密碼，可重複執行）
 --
--- 設計（V2 — 切回 SECURITY INVOKER 消除 Supabase Security Advisor 警告）
---   1. analyst role：read-only login user
---   2. 4 個 VIEW：把 raw_payload 扁平展開成普通欄位
---   3. VIEW 用預設 INVOKER 模式（查詢者本身的權限去讀底層）
---   4. 所以同時 GRANT SELECT 給 analyst 在 4 張實表上；
---      文件只教 analyst 用 VIEW，不會主動去碰 raw_payload 實表
+-- 在 Supabase SQL Editor 執行
+-- 前置條件：已先執行 CREATE ROLE analyst LOGIN PASSWORD '...';
 --
--- 在 Supabase SQL Editor 按順序執行
+-- 設計：
+--   - VIEW 用預設 INVOKER 模式（不會觸發 Supabase Security Advisor 警告）
+--   - 所以同時也要 GRANT SELECT 給 analyst 在 4 張實表上
+--   - 文件只教 analyst 用 VIEW，不會主動去碰實表（也沒理由用，raw_payload 是 JSONB）
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- 1. 建立 read-only role
---    執行前：把 'CHANGE_ME_STRONG_PASSWORD' 換成 24+ 字元強密碼
---    跑完後：把這段從 SQL Editor 視窗清除，避免歷史殘留
--- ---------------------------------------------------------------------
-CREATE ROLE analyst LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD';
-
-GRANT CONNECT ON DATABASE postgres TO analyst;
-GRANT USAGE ON SCHEMA public TO analyst;
-
-
--- ---------------------------------------------------------------------
--- 2. Ticker views（扁平化 raw_payload）
+-- 1. Ticker views (扁平化 raw_payload)
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_hsi_ticker AS
 SELECT
@@ -47,9 +35,8 @@ SELECT
     received_at
 FROM hhi_ticker;
 
-
 -- ---------------------------------------------------------------------
--- 3. Order book views（1-10 檔展開 + spread + mid_price）
+-- 2. Order book views (1-10 檔展開 + spread + mid_price)
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_hsi_order_book AS
 SELECT
@@ -145,45 +132,30 @@ SELECT
     received_at
 FROM hhi_order_book;
 
-
 -- ---------------------------------------------------------------------
--- 4. 確保 VIEW 是 SECURITY INVOKER（消 Supabase 警告）
+-- 3. 切回 SECURITY INVOKER（消除 Supabase Security Advisor 警告）
+--    若先前曾設過 SECURITY DEFINER 才需要這段，新建專案可省略
 -- ---------------------------------------------------------------------
 ALTER VIEW v_hsi_ticker      SET (security_invoker = true);
 ALTER VIEW v_hhi_ticker      SET (security_invoker = true);
 ALTER VIEW v_hsi_order_book  SET (security_invoker = true);
 ALTER VIEW v_hhi_order_book  SET (security_invoker = true);
 
-
 -- ---------------------------------------------------------------------
--- 5. 授權：實表 + VIEW 都給 SELECT（INVOKER 模式必須要實表權限）
+-- 4. 授權：實表 + VIEW 都給 SELECT
+--    (VIEW 用 INVOKER 模式，必須有底層表的 SELECT 權才能讀)
 -- ---------------------------------------------------------------------
 GRANT SELECT ON
     hsi_ticker, hhi_ticker, hsi_order_book, hhi_order_book,
     v_hsi_ticker, v_hhi_ticker, v_hsi_order_book, v_hhi_order_book
 TO analyst;
 
-
 -- ---------------------------------------------------------------------
--- 6. 驗證
+-- 5. 驗證
 -- ---------------------------------------------------------------------
 SELECT table_name, privilege_type
 FROM information_schema.role_table_grants
 WHERE grantee = 'analyst'
 ORDER BY table_name;
--- 預期：8 條 SELECT 紀錄（4 張表 + 4 個 VIEW）
 
-
--- =====================================================================
--- Connection 範本給分析部
--- =====================================================================
--- postgresql://analyst:<密碼>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
---
--- 從 Supabase Dashboard → Project Settings → Database → Connection String 取
--- 把預設 user `postgres` 換成 `analyst` + 你設的密碼即可
-
--- =====================================================================
--- 緊急回收
--- =====================================================================
--- ALTER ROLE analyst NOLOGIN;          -- 暫時禁用
--- DROP ROLE analyst;                   -- 完全移除（自動清掉所有授權）
+-- 預期看到 8 條 SELECT 紀錄（4 張表 + 4 個 VIEW）

@@ -186,9 +186,10 @@ FROM hsi_order_book WHERE bid_levels = 10 AND ask_levels = 10;
 ## 分析部門存取策略
 - **Phase 1（現階段）**：Read-only `analyst` role + 4 個 VIEW（`v_hsi_ticker` / `v_hhi_ticker` / `v_hsi_order_book` / `v_hhi_order_book`）
   - VIEW 把 raw_payload 扁平展開成普通欄位（含 1-10 檔擺盤、spread、mid_price）
-  - VIEW 用 SECURITY DEFINER（`security_invoker = false`），底層查實表用 owner 權限
-  - analyst 沒有實體表 SELECT 權，無法繞過 VIEW
-  - SQL：`sql/analyst_role.sql`，使用說明：`docs/analyst_quickstart.md`
+  - VIEW 用預設 INVOKER 模式（避免 Supabase Security Advisor 警告）
+  - analyst 同時授權底層 4 張實表 + 4 個 VIEW 的 SELECT；文件只教用 VIEW
+  - SQL：`sql/analyst_role.sql`（首次完整建置）/ `sql/analyst_role_views_only.sql`（重建 VIEW 不重設密碼）
+  - 使用說明：`docs/analyst_quickstart.md`
 - **Phase 2（觸發條件：表體積 > 50GB / 查詢延遲 > 30s / 上線滿 30 天，任一）**：Parquet 增量轉存
   - 7 天熱資料留 Postgres、歷史走 Parquet (DuckDB / FDW)
   - VIEW 改成 `Postgres UNION ALL Parquet`，分析師 query 不用改
