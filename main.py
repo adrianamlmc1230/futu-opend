@@ -38,7 +38,6 @@ from futu import (
     Session,
     SubType,
     TickerHandlerBase,
-    set_all_thread_daemon,
 )
 from supabase import Client, create_client
 
@@ -419,9 +418,6 @@ def main() -> None:
         MAX_QUEUE_SIZE,
         HEALTH_CHECK_INTERVAL,
     )
-
-    # 確保 SDK 內部所有 thread 為 daemon，避免 ctx.close() 卡住時主程序無法退出
-    set_all_thread_daemon(True)
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
