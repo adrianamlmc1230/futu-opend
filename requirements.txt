@@ -1,0 +1,3 @@
+futu-api>=8.5.3000
+supabase>=2.6.0
+python-dotenv>=1.0.1

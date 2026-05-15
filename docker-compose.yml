@@ -1,0 +1,25 @@
+# =====================================================================
+# 注意：
+#   - network_mode: host 僅在 Linux 主機可用 (符合本專案部署環境)
+#   - host 模式下，container 內可直接以 127.0.0.1:11111 連線到 OpenD
+#   - restart: always 為唯一的「告警/重啟」機制
+# =====================================================================
+services:
+  futu-collector:
+    build: .
+    container_name: futu-collector
+    network_mode: host
+    restart: always
+    env_file:
+      - .env
+    environment:
+      OPEND_HOST: 127.0.0.1
+      OPEND_PORT: 11111
+      FLUSH_INTERVAL: "2.0"
+      MAX_QUEUE_SIZE: "50000"
+      HEALTH_CHECK_INTERVAL: "30"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
