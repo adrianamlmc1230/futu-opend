@@ -182,3 +182,14 @@ FROM hsi_order_book WHERE bid_levels = 10 AND ask_levels = 10;
 - ⚠ Futu 帳號**必須具備 LV2 訂閱權限**，否則港股期指 TICKER 不會推送（官方限制：HK options/futures TICKER 在 LV1 下無法訂閱）
 - ⏳ 未做表體積監控與分區（rolling），長期跑需考慮
 - ⏳ Windows / macOS 開發環境需自行調整 `network_mode`
+
+## 分析部門存取策略
+- **Phase 1（現階段）**：Read-only `analyst` role + 4 個 VIEW（`v_hsi_ticker` / `v_hhi_ticker` / `v_hsi_order_book` / `v_hhi_order_book`）
+  - VIEW 把 raw_payload 扁平展開成普通欄位（含 1-10 檔擺盤、spread、mid_price）
+  - VIEW 用 SECURITY DEFINER（`security_invoker = false`），底層查實表用 owner 權限
+  - analyst 沒有實體表 SELECT 權，無法繞過 VIEW
+  - SQL：`sql/analyst_role.sql`，使用說明：`docs/analyst_quickstart.md`
+- **Phase 2（觸發條件：表體積 > 50GB / 查詢延遲 > 30s / 上線滿 30 天，任一）**：Parquet 增量轉存
+  - 7 天熱資料留 Postgres、歷史走 Parquet (DuckDB / FDW)
+  - VIEW 改成 `Postgres UNION ALL Parquet`，分析師 query 不用改
+  - 計劃：`docs/phase2_parquet_plan.md`
