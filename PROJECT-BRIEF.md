@@ -28,6 +28,7 @@
 | V2 重構 | OrderBook 主時間用 `svr_recv_time_bid`，空值 fallback `received_at` | 保留交易所側時間語義，且 NOT NULL |
 | V2 重構 | 加 `bid_levels` / `ask_levels` 核心欄位 | 監控擺盤完整性（是否每次都 10 檔）|
 | V2 重構 | Ticker `sequence` 不抽出、不做唯一約束 | 接受重連補推可能造成的重複，後段去重 |
+| 部署設定 | 4 張表全部開 RLS，但暫不寫 policy | service_role 會 bypass 不影響採集；同時擋住 anon key 萬一外洩造成的資料裸奔；未來要做查詢前端時再針對特定 role 加 SELECT policy |
 
 ## 邏輯偽代碼
 
