@@ -23,3 +23,25 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+
+  # ---------------------------------------------------------------
+  # 冷熱分離排程器：每天 HKT 04:00 把昨天資料封存到 Cloudflare R2
+  # 然後刪除 Supabase 上對應的 row。
+  # ---------------------------------------------------------------
+  data-archiver-cron:
+    build:
+      context: .
+      dockerfile: Dockerfile.archiver
+    container_name: data-archiver-cron
+    restart: always
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Hong_Kong
+      ARCHIVE_TIME: "04:00"           # HKT
+      ARCHIVER_RUN_AT_STARTUP: "0"    # 設 1 可在啟動時立刻跑一次（測試用）
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

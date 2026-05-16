@@ -1,0 +1,22 @@
+# =====================================================================
+# 冷熱分離封存服務（每日 04:00 HKT 觸發）
+# 與 collector 共用 base image / requirements，但只跑 archiver
+# =====================================================================
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Asia/Hong_Kong
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY data_archiver.py archiver_scheduler.py ./
+
+CMD ["python", "archiver_scheduler.py"]

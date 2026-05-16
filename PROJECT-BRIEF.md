@@ -12,6 +12,9 @@
 - ✅ Docker 化（host network + restart:always）
 - ✅ **已上線運行**：阿里雲香港 VPS (`47.76.134.145`) + Futu OpenD 10.5.6508 + container 自動重啟
 - ✅ Futu HK Futures LV2 權限正常，4 張表持續寫入（每秒數十筆）
+- ✅ Phase 1 分析部存取：`analyst` role + 4 個 VIEW
+- ✅ 冷熱分離（V1）：`data_archiver.py` + `archiver_scheduler.py`，每天 HKT 04:00 把昨天資料封存到 Cloudflare R2 並刪除 DB
+- 📊 實測消耗：~600 MB / 日（~750k rows，擺盤占 88%）
 - ⏸ 尚未做舊資料清理（依需求暫不做）
 
 ## 關鍵決策紀錄
@@ -180,6 +183,8 @@ FROM hsi_order_book WHERE bid_levels = 10 AND ask_levels = 10;
 - ⚠ 主機重啟、容器 OOM 時佇列內資料會遺失（trade-off：簡化設計）
 - ⚠ Supabase 長時間不可用時佇列會滿，會丟棄最舊資料（保新棄舊）
 - ⚠ Futu 帳號**必須具備 LV2 訂閱權限**，否則港股期指 TICKER 不會推送（官方限制：HK options/futures TICKER 在 LV1 下無法訂閱）
+- ⚠ **Supabase 必須是 Pro tier 或更高**：本服務 LV2 推送一日寫入量約 1-3 GB，Free tier 500 MB 撐不過 24 小時。上線前必須先升級或安排 Phase 2 Parquet 轉存
+- ℹ Supabase / PostgREST HTTP/2 連線跑滿 19999 stream 後會主動 reset（`ConnectionTerminated last_stream_id:19999`）：屬正常 lifecycle，由 BatchWriter 的 requeue 機制吸收、不會丟資料；19 小時內出現約 9 次屬正常頻率
 - ⏳ 未做表體積監控與分區（rolling），長期跑需考慮
 - ⏳ Windows / macOS 開發環境需自行調整 `network_mode`
 
