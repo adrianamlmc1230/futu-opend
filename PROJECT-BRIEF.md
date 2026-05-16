@@ -185,6 +185,8 @@ FROM hsi_order_book WHERE bid_levels = 10 AND ask_levels = 10;
 - ⚠ Supabase 長時間不可用時佇列會滿，會丟棄最舊資料（保新棄舊）
 - ⚠ Futu 帳號**必須具備 LV2 訂閱權限**，否則港股期指 TICKER 不會推送（官方限制：HK options/futures TICKER 在 LV1 下無法訂閱）
 - ⚠ **Supabase 必須是 Pro tier 或更高**：本服務 LV2 推送一日寫入量約 1-3 GB，Free tier 500 MB 撐不過 24 小時。上線前必須先升級或安排 Phase 2 Parquet 轉存
+- ⚠ **Archiver 預設會 OVERWRITE R2 物件**：`s3.upload_file()` 對相同 key 直接覆蓋。若同一個 target_date 因為邊界邏輯改動（如先按 calendar day、再按 trading day）跑兩次，第二次會把第一次的內容蓋掉，**資料永久遺失**。待辦：在 `archive_one_table` 上傳前加 `head_object` 預檢，存在即 raise 拒絕覆蓋
+- ⚠ **部署當天的「第一個交易日」資料必然殘缺**：如果中午部署上線，當天的 09:15 – 部署時間段不會有資料。事後不要把這天當完整資料看；建議改名 `<date>-partial.parquet` 或從第一個完整交易日才開始算數
 - ℹ Supabase / PostgREST HTTP/2 連線跑滿 19999 stream 後會主動 reset（`ConnectionTerminated last_stream_id:19999`）：屬正常 lifecycle，由 BatchWriter 的 requeue 機制吸收、不會丟資料；19 小時內出現約 9 次屬正常頻率
 - ⏳ 未做表體積監控與分區（rolling），長期跑需考慮
 - ⏳ Windows / macOS 開發環境需自行調整 `network_mode`

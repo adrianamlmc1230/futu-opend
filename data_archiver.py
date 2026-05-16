@@ -13,6 +13,9 @@ data_archiver.py — 港股 HSI/HHI LV2 行情冷熱數據分離
     - SELECT 時記下 (min_id, max_id)，DELETE 用 id 範圍鎖死
       → 即使期間有 late-arriving / out-of-order 資料，也不會誤刪
     - 上傳完成後做 head_object 驗證 + ContentLength 比對，**驗證失敗不刪 DB**
+    - **R2 同 key 已存在時**：
+        * 內容大小相同 → 視為 idempotent re-run，skip 上傳直接做 DELETE
+        * 內容不同     → 自動 copy 舊檔到 `key.bak.<unix_ts>` 再覆寫，舊資料絕不遺失
     - 寫入失敗的暫存 Parquet 留在 /tmp，下次重跑會 overwrite
     - 整個流程 idempotent：當天重跑無副作用
     - raw_payload (JSONB) 在寫 Parquet 前 json.dumps() 轉字串，
@@ -240,36 +243,67 @@ def archive_one_table(
             log.warning("  [DRY-RUN] 跳過上傳與刪除")
             return ArchiveResult(table, max_id - min_id + 1, size, s3_key, 0)
 
+        # 防護：若 key 已存在
+        #   - 內容大小相同 → 視為 idempotent re-run，skip 上傳直接做 DELETE（無副作用）
+        #   - 內容不同     → 自動備份舊檔到 .bak.<unix_ts>，再覆寫；舊資料絕不遺失
+        existing_size = None
         try:
-            s3.upload_file(
-                Filename=str(pq_path),
-                Bucket=S3_BUCKET_NAME,
-                Key=s3_key,
-                ExtraArgs={"ContentType": "application/vnd.apache.parquet"},
-            )
-        except (BotoCoreError, ClientError) as exc:
-            log.error("上傳失敗，**不刪除 DB**：%s", exc)
-            raise
-
-        # ----- Step 3.5：上傳後驗證 -----
-        log.info("Step 3.5 驗證 head_object")
-        try:
-            head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+            existing = s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+            existing_size = existing["ContentLength"]
         except ClientError as exc:
-            log.error("head_object 失敗，**不刪除 DB**：%s", exc)
-            raise
+            if exc.response.get("Error", {}).get("Code") not in ("404", "NoSuchKey"):
+                raise
 
-        remote_size = head["ContentLength"]
-        if remote_size != size:
-            log.error(
-                "Size 不一致 (local=%d, remote=%d)，**不刪除 DB**",
-                size,
-                remote_size,
-            )
-            raise RuntimeError(
-                f"upload size mismatch local={size} remote={remote_size}"
-            )
-        log.info("  驗證通過 (size=%d, etag=%s)", remote_size, head.get("ETag"))
+        skip_upload = False
+        if existing_size is not None:
+            if existing_size == size:
+                log.info("  R2 已有同尺寸物件 (%d bytes)，視為重跑，skip 上傳",
+                         existing_size)
+                skip_upload = True
+            else:
+                ts = int(datetime.now(timezone.utc).timestamp())
+                bak_key = f"{s3_key}.bak.{ts}"
+                log.warning(
+                    "  R2 已有 %d bytes 但本次要上傳 %d bytes，先備份舊檔到 %s",
+                    existing_size, size, bak_key,
+                )
+                s3.copy_object(
+                    Bucket=S3_BUCKET_NAME,
+                    Key=bak_key,
+                    CopySource={"Bucket": S3_BUCKET_NAME, "Key": s3_key},
+                )
+
+        if not skip_upload:
+            try:
+                s3.upload_file(
+                    Filename=str(pq_path),
+                    Bucket=S3_BUCKET_NAME,
+                    Key=s3_key,
+                    ExtraArgs={"ContentType": "application/vnd.apache.parquet"},
+                )
+            except (BotoCoreError, ClientError) as exc:
+                log.error("上傳失敗，**不刪除 DB**：%s", exc)
+                raise
+
+            # ----- Step 3.5：上傳後驗證 -----
+            log.info("Step 3.5 驗證 head_object")
+            try:
+                head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+            except ClientError as exc:
+                log.error("head_object 失敗，**不刪除 DB**：%s", exc)
+                raise
+
+            remote_size = head["ContentLength"]
+            if remote_size != size:
+                log.error(
+                    "Size 不一致 (local=%d, remote=%d)，**不刪除 DB**",
+                    size,
+                    remote_size,
+                )
+                raise RuntimeError(
+                    f"upload size mismatch local={size} remote={remote_size}"
+                )
+            log.info("  驗證通過 (size=%d, etag=%s)", remote_size, head.get("ETag"))
 
     # ----- Step 4：delete from Postgres -----
     log.info("Step 4/4 DELETE rows id BETWEEN %d AND %d", min_id, max_id)
