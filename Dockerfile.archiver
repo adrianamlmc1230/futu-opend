@@ -17,6 +17,6 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY data_archiver.py archiver_scheduler.py ./
+COPY data_archiver.py archiver_scheduler.py share_parquet.py ./
 
 CMD ["python", "archiver_scheduler.py"]
