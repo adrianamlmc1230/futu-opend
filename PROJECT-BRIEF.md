@@ -13,7 +13,7 @@
 - ✅ **已上線運行**：阿里雲香港 VPS (`47.76.134.145`) + Futu OpenD 10.5.6508 + container 自動重啟
 - ✅ Futu HK Futures LV2 權限正常，4 張表持續寫入（每秒數十筆）
 - ✅ Phase 1 分析部存取：`analyst` role + 4 個 VIEW
-- ✅ 冷熱分離（V1）：`data_archiver.py` + `archiver_scheduler.py`，每天 HKT 04:00 把昨天資料封存到 Cloudflare R2 並刪除 DB
+- ✅ 冷熱分離（V1）：`data_archiver.py` + `archiver_scheduler.py`，每天 HKT 04:30 把上一個交易日（D 04:00 → D+1 04:00 HKT，覆蓋日盤+夜期）資料封存到 Cloudflare R2，DELETE 後跑 VACUUM FULL 還空間給 OS
 - 📊 實測消耗：~600 MB / 日（~750k rows，擺盤占 88%）
 - 📊 實測壓縮率 ~41x：每天 ~470 MB Postgres → ~11.5 MB Parquet (zstd) on R2；R2 free tier 10 GB 可撐 ~850 天
 - ⏸ 尚未做舊資料清理（依需求暫不做）
