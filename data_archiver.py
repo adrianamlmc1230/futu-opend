@@ -1,11 +1,13 @@
 """
 data_archiver.py — 港股 HSI/HHI LV2 行情冷熱數據分離
 
-每日 04:00 (HKT) 把 Supabase 4 張表中「昨天全天」的資料：
-    1. 用 pandas 從 Postgres 拉出來（昨天 HKT 00:00 ≤ ts < 今天 HKT 00:00）
+每日 04:30 (HKT) 把 Supabase 4 張表中「上一個交易日」的資料：
+    1. 用 pandas 從 Postgres 拉出來（D 04:00 HKT ≤ ts < D+1 04:00 HKT）
+       — 用 04:00 切日把日盤 + 夜期完整放進同一個 parquet
     2. 轉成 ZSTD 壓縮的 Parquet
     3. PUT 到 Cloudflare R2 (S3 相容)
     4. **驗證上傳成功才** DELETE 對應的 Postgres rows
+    5. VACUUM FULL：把 dead tuple 空間還給 OS（需 5432 直連）
 
 防禦設計
     - SELECT 時記下 (min_id, max_id)，DELETE 用 id 範圍鎖死
@@ -16,7 +18,7 @@ data_archiver.py — 港股 HSI/HHI LV2 行情冷熱數據分離
     - raw_payload (JSONB) 在寫 Parquet 前 json.dumps() 轉字串，
       避免 pyarrow 對 mixed-type dict 的 schema-infer 失敗
 
-排程器（archiver_scheduler.py）每天觸發一次此模組的 run_once()。
+排程器（archiver_scheduler.py）每天 04:30 觸發一次此模組的 run_once()。
 也可以本機用 `python data_archiver.py [--dry-run] [--date YYYY-MM-DD]` 手動跑。
 """
 from __future__ import annotations
@@ -80,17 +82,30 @@ class ArchiveResult:
 
 
 # === 工具函數 =======================================================
-def yesterday_hk_range(target_date: date | None = None) -> tuple[datetime, datetime, date]:
+def trading_day_hk_range(target_date: date | None = None) -> tuple[datetime, datetime, date]:
     """
-    回傳 (start, end, date_obj)：
-      - target_date 預設為「現在 HK 時間的前一天」
-      - start = target_date 00:00:00 +08:00
-      - end   = target_date+1 00:00:00 +08:00
+    回傳「交易日切日」的 (start, end, date_obj)：
+
+      交易日 D = D 04:00 HKT  ≤ ts <  D+1 04:00 HKT
+
+    為什麼是 04:00 切：
+      - 港股期指夜期 17:15 HKT → 次日 03:00 HKT
+      - 用 04:00 切日可以把同一個交易日的「日盤 + 夜期」完整放進同一個 parquet
+      - calendar-day 切會把夜期切成兩半，分析時很麻煩
+
+    target_date 預設為「現在 HKT 之前已經收盤完成的最近交易日」：
+      - 如果現在 HKT >= 04:00：那麼「昨天」剛收盤完成（昨天日盤 + 昨晚夜期），target = 昨天
+      - 如果現在 HKT <  04:00：那麼前天才剛收盤完成，target = 前天
     """
     if target_date is None:
         now_hk = datetime.now(HK_TZ)
-        target_date = (now_hk - timedelta(days=1)).date()
-    start = datetime.combine(target_date, datetime.min.time(), tzinfo=HK_TZ)
+        # archiver 排在 04:30 觸發，正常情況 hour >= 4，target = yesterday
+        # 若提早跑（< 04:00），代表夜期還沒收盤，要往前推一天
+        if now_hk.hour >= 4:
+            target_date = (now_hk - timedelta(days=1)).date()
+        else:
+            target_date = (now_hk - timedelta(days=2)).date()
+    start = datetime.combine(target_date, datetime.min.time(), tzinfo=HK_TZ) + timedelta(hours=4)
     end = start + timedelta(days=1)
     return start, end, target_date
 
@@ -122,6 +137,43 @@ def temp_parquet_path(table: str, date_str: str):
             os.unlink(path)
         except FileNotFoundError:
             pass
+
+
+def _vacuum_full(tables: list[str]) -> None:
+    """
+    對指定表執行 VACUUM FULL，把 dead tuple 占用的實體空間還給 OS。
+
+    必須用 5432 直連（SUPABASE_DB_DIRECT_URL），pgbouncer pool 不支援。
+    若沒設 SUPABASE_DB_DIRECT_URL 則跳過（log 警告）。
+
+    autocommit 模式：VACUUM 不能在 transaction 內執行。
+    """
+    direct_url = os.getenv("SUPABASE_DB_DIRECT_URL")
+    if not direct_url:
+        logger.warning("未設定 SUPABASE_DB_DIRECT_URL，跳過 VACUUM FULL（autovacuum 會處理 dead tuple，但體積要等下次重寫才會縮）")
+        return
+
+    logger.info("=" * 60)
+    logger.info("VACUUM FULL：把 dead tuple 空間還給 OS")
+    logger.info("=" * 60)
+    engine = create_engine(direct_url, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
+    try:
+        with engine.connect() as conn:
+            for tbl in tables:
+                t0 = datetime.now()
+                try:
+                    conn.execute(text(f"VACUUM FULL {tbl}"))
+                    elapsed = (datetime.now() - t0).total_seconds()
+                    # 取新的體積
+                    size = conn.execute(
+                        text(f"SELECT pg_size_pretty(pg_total_relation_size('{tbl}'::regclass))")
+                    ).scalar()
+                    logger.info("  - %-18s 完成（%.1fs）→ size %s", tbl, elapsed, size)
+                except Exception as exc:
+                    logger.error("  - %-18s 失敗: %s", tbl, exc)
+    finally:
+        engine.dispose()
+    logger.info("=" * 60)
 
 
 # === 主流程 =========================================================
@@ -242,9 +294,9 @@ def run_once(target_date: date | None = None, dry_run: bool = False) -> list[Arc
     跑完整一次封存。回傳每張表的結果。
     """
     _check_env()
-    start, end, target_date = yesterday_hk_range(target_date)
+    start, end, target_date = trading_day_hk_range(target_date)
     logger.info("=" * 60)
-    logger.info("封存日期: %s (HKT)", target_date)
+    logger.info("封存交易日: %s (HKT 04:00 → 次日 04:00)", target_date)
     logger.info("時間區間: %s ~ %s", start, end)
     logger.info("=" * 60)
 
@@ -279,6 +331,14 @@ def run_once(target_date: date | None = None, dry_run: bool = False) -> list[Arc
                     r.table, r.rows, r.bytes_uploaded / 1024 / 1024,
                     r.s3_key, r.deleted)
     logger.info("=" * 60)
+
+    # ---- VACUUM FULL：把 dead tuple 占用的實體空間還給 OS ----
+    # 必須走「直連 5432」，pgbouncer transaction-mode (port 6543) 不支援
+    # VACUUM FULL 取 ACCESS EXCLUSIVE LOCK，會 block collector 寫入幾秒
+    # 但 collector 有 requeue 機制，超時會自動重試，不會丟資料
+    if not dry_run and total_deleted > 0:
+        _vacuum_full(list(TABLES.keys()))
+
     return results
 
 

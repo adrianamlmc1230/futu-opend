@@ -38,7 +38,7 @@ services:
       - .env
     environment:
       TZ: Asia/Hong_Kong
-      ARCHIVE_TIME: "04:00"           # HKT
+      ARCHIVE_TIME: "04:30"           # HKT，夜期 03:00 收盤後留 30 分鐘 buffer
       ARCHIVER_RUN_AT_STARTUP: "0"    # 設 1 可在啟動時立刻跑一次（測試用）
     logging:
       driver: json-file

@@ -15,6 +15,7 @@
 - ✅ Phase 1 分析部存取：`analyst` role + 4 個 VIEW
 - ✅ 冷熱分離（V1）：`data_archiver.py` + `archiver_scheduler.py`，每天 HKT 04:00 把昨天資料封存到 Cloudflare R2 並刪除 DB
 - 📊 實測消耗：~600 MB / 日（~750k rows，擺盤占 88%）
+- 📊 實測壓縮率 ~41x：每天 ~470 MB Postgres → ~11.5 MB Parquet (zstd) on R2；R2 free tier 10 GB 可撐 ~850 天
 - ⏸ 尚未做舊資料清理（依需求暫不做）
 
 ## 關鍵決策紀錄
