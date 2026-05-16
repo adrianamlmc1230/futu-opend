@@ -34,6 +34,7 @@
 | V2 重構 | 加 `bid_levels` / `ask_levels` 核心欄位 | 監控擺盤完整性（是否每次都 10 檔）|
 | V2 重構 | Ticker `sequence` 不抽出、不做唯一約束 | 接受重連補推可能造成的重複，後段去重 |
 | 部署設定 | 4 張表全部開 RLS，但暫不寫 policy | service_role 會 bypass 不影響採集；同時擋住 anon key 萬一外洩造成的資料裸奔；未來要做查詢前端時再針對特定 role 加 SELECT policy |
+| Archiver | R2 同 key 衝突採三段式判斷：head_object → size 相同 skip 上傳直接 DELETE → size 不同先 copy 備份成 `<key>.bak.<ts>` 再覆寫 | 直接拒絕覆寫要人工介入不夠優雅；備份策略既支援 idempotent re-run，又確保舊資料絕不遺失 |
 
 ## 邏輯偽代碼
 
@@ -180,12 +181,17 @@ SELECT svr_recv_time_bid, ask1_price - bid1_price AS spread
 FROM hsi_order_book WHERE bid_levels = 10 AND ask_levels = 10;
 ```
 
+## 專案演進方法論
+- **MVP 階段（現在）**：目標是「跑通 → 跑穩 → 摸清業務需求」，不過早工程化
+- **穩定期**：累積一段運行 metric 與 pitfalls，不主動改架構
+- **重構/升級期**：一次到位處理分佈式、生產級監控、CI/CD、密碼輪替、自動化測試
+- 拒絕在 MVP 階段做的事：CI/CD、unit test、密碼管理器、複雜監控。理由：業務需求尚未定型、過早工程化會讓系統服務系統而非服務業務
+
 ## 已知限制 / 待辦
 - ⚠ 主機重啟、容器 OOM 時佇列內資料會遺失（trade-off：簡化設計）
 - ⚠ Supabase 長時間不可用時佇列會滿，會丟棄最舊資料（保新棄舊）
 - ⚠ Futu 帳號**必須具備 LV2 訂閱權限**，否則港股期指 TICKER 不會推送（官方限制：HK options/futures TICKER 在 LV1 下無法訂閱）
 - ⚠ **Supabase 必須是 Pro tier 或更高**：本服務 LV2 推送一日寫入量約 1-3 GB，Free tier 500 MB 撐不過 24 小時。上線前必須先升級或安排 Phase 2 Parquet 轉存
-- ⚠ **Archiver 預設會 OVERWRITE R2 物件**：`s3.upload_file()` 對相同 key 直接覆蓋。若同一個 target_date 因為邊界邏輯改動（如先按 calendar day、再按 trading day）跑兩次，第二次會把第一次的內容蓋掉，**資料永久遺失**。待辦：在 `archive_one_table` 上傳前加 `head_object` 預檢，存在即 raise 拒絕覆蓋
 - ⚠ **部署當天的「第一個交易日」資料必然殘缺**：如果中午部署上線，當天的 09:15 – 部署時間段不會有資料。事後不要把這天當完整資料看；建議改名 `<date>-partial.parquet` 或從第一個完整交易日才開始算數
 - ℹ Supabase / PostgREST HTTP/2 連線跑滿 19999 stream 後會主動 reset（`ConnectionTerminated last_stream_id:19999`）：屬正常 lifecycle，由 BatchWriter 的 requeue 機制吸收、不會丟資料；19 小時內出現約 9 次屬正常頻率
 - ⏳ 未做表體積監控與分區（rolling），長期跑需考慮
