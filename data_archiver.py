@@ -13,6 +13,8 @@ data_archiver.py — 港股 HSI/HHI LV2 行情冷熱數據分離
     - 上傳完成後做 head_object 驗證 + ContentLength 比對，**驗證失敗不刪 DB**
     - 寫入失敗的暫存 Parquet 留在 /tmp，下次重跑會 overwrite
     - 整個流程 idempotent：當天重跑無副作用
+    - raw_payload (JSONB) 在寫 Parquet 前 json.dumps() 轉字串，
+      避免 pyarrow 對 mixed-type dict 的 schema-infer 失敗
 
 排程器（archiver_scheduler.py）每天觸發一次此模組的 run_once()。
 也可以本機用 `python data_archiver.py [--dry-run] [--date YYYY-MM-DD]` 手動跑。
@@ -20,6 +22,7 @@ data_archiver.py — 港股 HSI/HHI LV2 行情冷熱數據分離
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -156,6 +159,16 @@ def archive_one_table(
     min_id = int(df["id"].min())
     max_id = int(df["id"].max())
     log.info("  撈到 %d 筆，id 範圍 [%d, %d]", len(df), min_id, max_id)
+
+    # JSONB 欄位 → JSON 字串
+    # pandas 從 Postgres 讀 JSONB 會解析為 Python dict/list，pyarrow 對
+    # 混型別（如 order book 中 {} 與 {orderid: vol} 並存）的 schema-infer 會失敗。
+    # 統一在這裡 json.dumps()，Parquet 存字串；分析時用 json.loads() 或
+    # DuckDB read_json_auto() 還原。
+    if "raw_payload" in df.columns:
+        df["raw_payload"] = df["raw_payload"].apply(
+            lambda v: None if v is None else json.dumps(v, separators=(",", ":"), ensure_ascii=False)
+        )
 
     # ----- Step 2：transform → Parquet -----
     with temp_parquet_path(table, date_str) as pq_path:
